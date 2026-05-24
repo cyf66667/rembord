@@ -23,10 +23,24 @@
     </div>
 
     <div id="main-screen" class="screen main-layout">
-        <div class="sidebar">
+        <div class="sidebar-overlay" id="sidebar-overlay" onclick="toggleSidebar()"></div>
+
+        <div class="sidebar" id="sidebar">
             <div class="sidebar-avatar" id="sidebar-avatar"></div>
+            <div class="sidebar-nickname" id="sidebar-nickname"></div>
             <div class="divider"></div>
             <div class="book-list" id="book-list"></div>
+            <div class="divider"></div>
+            <div class="sidebar-menu">
+                <div class="sidebar-menu-item" id="sidebar-unfamiliar-btn">📖 查看生词本</div>
+                <div class="sidebar-menu-item" onclick="alert('账户信息功能开发中')">👤 账户信息</div>
+            </div>
+        </div>
+
+        <div class="main-header">
+            <span class="header-btn" id="menu-btn">☰</span>
+            <span class="header-title">背单词</span>
+            <span class="header-btn" id="calendar-btn">📅</span>
         </div>
 
         <div class="main-content">
@@ -41,6 +55,7 @@
                             <option value="cet4">四级核心词汇</option>
                             <option value="cet6">六级高频词汇</option>
                             <option value="ielts">雅思红宝书</option>
+                            <option value="kaoyan">考研必背词汇</option>
                         </select>
                     </div>
                     <div class="input-group" style="display:flex; gap:10px; text-align: left;">
@@ -56,7 +71,7 @@
                     <button class="btn" id="import-btn">打乱顺序并生成任务</button>
                 </div>
                 
-                <div id="learning-state" style="display:none; flex-direction:column; height:100%;">
+                <div id="learning-state" style="display:none; position:absolute; top:20px; left:20px; right:20px; bottom:80px; flex-direction:column;">
                     <div class="word-list-header">
                         <span id="current-book-title">四级词汇</span>
                         <span id="daily-task-count" style="font-size: 13px; color: #4CAF50; font-weight: normal;">今日任务: 0词</span>
@@ -65,14 +80,74 @@
                     <div class="word-list-container" id="word-list-container"></div>
                     
                     <div class="learning-actions">
-                        <button class="action-outline-btn" id="view-unfamiliar-btn">📖 查看生词本</button>
+                        <button class="action-outline-btn" id="focus-mode-btn">🧘 专注模式</button>
                         <button class="action-primary-btn" id="setup-dictation-btn">✍️ 默写已背单词</button>
                     </div>
                 </div>
             </div>
 
-            <div id="tab-dictate" class="tab-content"><div class="empty-state">🎧 听写模式</div></div>
-            <div id="tab-garden" class="tab-content"><div class="empty-state">🌻 能量花园</div></div>
+            <div id="tab-dictate" class="tab-content">
+                <div class="empty-state" id="dictate-setup-state">
+                    <span style="font-size:40px; margin-bottom: 10px;">🎧</span>
+                    <h3 style="margin-bottom: 10px;">听写模式</h3>
+                    <p style="font-size: 13px; color: #888; margin-bottom: 20px; max-width: 80%;">系统将朗读英文单词，请在输入框中写下你听到的内容</p>
+                    <div class="input-group" style="max-width: 80%;">
+                        <select id="dictate-book-select">
+                            <option value="today">📅 今日已学单词</option>
+                            <option value="cet4">四级核心词汇</option>
+                            <option value="cet6">六级高频词汇</option>
+                            <option value="ielts">雅思红宝书</option>
+                            <option value="kaoyan">考研必背词汇</option>
+                        </select>
+                    </div>
+                    <button class="btn" id="start-dictate-btn" style="max-width: 80%;">开始听写</button>
+                </div>
+                <div id="dictate-game" style="display:none; position:absolute; top:20px; left:20px; right:20px; bottom:80px; flex-direction:column;">
+                    <div class="word-list-header">
+                        <span>听写测试</span>
+                        <span id="dictate-progress-text" style="font-size: 13px; color: #4CAF50; font-weight: normal;">1 / 10</span>
+                    </div>
+                    <div style="flex:1; display:flex; flex-direction:column; justify-content:center; align-items:center; gap:20px;">
+                        <button id="dictate-play-btn" style="width:80px; height:80px; border-radius:50%; border:none; background:#4CAF50; color:white; font-size:32px; cursor:pointer; box-shadow:0 4px 12px rgba(76,175,80,0.3);">🔊</button>
+                        <p style="font-size:12px; color:#888;">点击播放单词发音</p>
+                        <div class="input-group" style="width:100%;">
+                            <input type="text" id="dictate-input" placeholder="请输入听到的单词" autocomplete="off">
+                        </div>
+                        <div id="dictate-feedback" style="display:none; width:100%; padding:15px; border-radius:12px; text-align:center;">
+                            <div id="dictate-result-icon" style="font-size:28px; margin-bottom:5px;"></div>
+                            <div id="dictate-result-text" style="font-size:16px; font-weight:bold;"></div>
+                            <div id="dictate-correct-word" style="font-size:14px; color:#666; margin-top:5px;"></div>
+                        </div>
+                    </div>
+                    <div class="learning-actions">
+                        <button class="action-primary-btn" id="dictate-submit-btn">提交答案</button>
+                        <button class="action-primary-btn" id="dictate-next-btn" style="display:none; background:#2196F3;">下一个</button>
+                    </div>
+                </div>
+                <div id="dictate-finish" class="empty-state" style="display:none;">
+                    <span style="font-size:40px; margin-bottom: 10px;">🎉</span>
+                    <h3 style="margin-bottom: 10px;">听写完成</h3>
+                    <p style="font-size: 14px; color: #666; margin-bottom: 5px;">正确: <span id="dictate-correct-count" style="color:#4CAF50; font-weight:bold;">0</span></p>
+                    <p style="font-size: 14px; color: #666; margin-bottom: 20px;">错误: <span id="dictate-wrong-count" style="color:#f44336; font-weight:bold;">0</span></p>
+                    <button class="btn" id="dictate-restart-btn" style="max-width: 80%;">再听写一次</button>
+                    <button class="action-outline-btn" id="dictate-back-btn" style="max-width: 80%; margin-top:10px;">返回选择</button>
+                </div>
+            </div>
+
+            <div id="tab-garden" class="tab-content">
+                <div class="garden-header">
+                    <div>
+                        <h3 style="font-size:18px;">🌻 能量花园</h3>
+                        <p style="font-size:12px; color:#888;">背单词，种花园</p>
+                    </div>
+                    <div class="water-badge">💧 <span id="water-count">0</span></div>
+                </div>
+                <div class="garden-grid" id="garden-grid"></div>
+                <div class="garden-actions">
+                    <button class="action-primary-btn" id="plant-btn">🌱 播种 (5💧)</button>
+                    <button class="action-outline-btn" id="water-btn">💧 浇水 (3💧)</button>
+                </div>
+            </div>
 
             <div class="bottom-nav">
                 <div class="nav-item active" data-tab="learn">📖 学习</div>
@@ -129,6 +204,54 @@
         <div style="margin-top: auto; padding-bottom: 20px;">
             <button class="btn" id="dictation-submit-btn" onclick="checkDictation()">提交查看答案</button>
             <button class="btn" id="dictation-next-btn" style="display:none; background:#2196F3;" onclick="nextDictation()">下一个</button>
+        </div>
+    </div>
+
+    <!-- 日历 Modal -->
+    <div class="modal-overlay" id="calendar-modal">
+        <div class="modal-card calendar-card">
+            <div class="close-modal" onclick="closeModal('calendar-modal')">×</div>
+            <h3 style="margin-bottom: 15px; text-align: center;">📅 学习日历</h3>
+            <div class="calendar-header">
+                <span class="cal-nav" id="cal-prev">◀</span>
+                <span id="cal-month-year"></span>
+                <span class="cal-nav" id="cal-next">▶</span>
+            </div>
+            <div class="calendar-grid" id="calendar-grid"></div>
+        </div>
+    </div>
+
+    <!-- 日期单词详情 Modal -->
+    <div class="modal-overlay" id="day-words-modal">
+        <div class="modal-card" style="height: 80%; display: flex; flex-direction: column;">
+            <div class="close-modal" onclick="closeModal('day-words-modal')">×</div>
+            <h3 id="day-words-title" style="margin-bottom: 15px;"></h3>
+            <div id="day-words-content" style="flex:1; overflow-y: auto;"></div>
+        </div>
+    </div>
+
+    <!-- 专注模式覆盖层 -->
+    <div class="focus-overlay" id="focus-overlay">
+        <div class="focus-header">
+            <span class="focus-exit" id="focus-exit-btn">✕ 退出专注</span>
+            <span class="focus-progress" id="focus-progress">1 / 20</span>
+        </div>
+        <div class="focus-scene" id="focus-scene">
+            <div class="focus-card" id="focus-card">
+                <div class="focus-card-front">
+                    <h1 id="focus-word">Loading...</h1>
+                    <p id="focus-phonetic"></p>
+                    <div class="focus-hint">点击卡片查看释义</div>
+                </div>
+                <div class="focus-card-back">
+                    <h2 id="focus-word-back"></h2>
+                    <p id="focus-translation"></p>
+                </div>
+            </div>
+        </div>
+        <div class="focus-actions" id="focus-actions">
+            <button class="focus-btn focus-unknown" id="focus-btn-unknown">不认识</button>
+            <button class="focus-btn focus-known" id="focus-btn-known">认识</button>
         </div>
     </div>
 

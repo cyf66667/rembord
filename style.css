@@ -4,7 +4,7 @@ body { background-color: #f4f7f6; display: flex; justify-content: center; align-
 
 .screen { display: none; height: 100%; flex-direction: column; padding: 30px; position: relative; }
 .screen.active { display: flex; }
-.main-layout { padding: 0; flex-direction: row !important; }
+.main-layout { padding: 0; position: relative; flex-direction: column !important; }
 h2 { font-size: 24px; color: #333; margin-top: 40px; margin-bottom: 10px; }
 .subtitle { color: #888; font-size: 14px; margin-bottom: 40px; }
 
@@ -14,13 +14,53 @@ input[type="text"], input[type="tel"], input[type="date"], select { width: 100%;
 .btn:disabled { background: #a5d6a7; cursor: not-allowed; }
 
 .avatar-preview { width: 80px; height: 80px; border-radius: 50%; background-color: #eee; margin: 0 auto 30px; background-size: cover; border: 2px solid #ddd; cursor: pointer; }
-.sidebar { width: 75px; background: #f8f9fa; border-right: 1px solid #eee; display: flex; flex-direction: column; align-items: center; padding: 20px 0; z-index: 10; }
+.sidebar {
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: 220px;
+    background: #fff;
+    border-right: 1px solid #eee;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 20px 0;
+    z-index: 40;
+    transform: translateX(-100%);
+    transition: transform 0.3s ease;
+    box-shadow: 2px 0 10px rgba(0,0,0,0.1);
+}
+.sidebar.open { transform: translateX(0); }
+.sidebar-overlay {
+    position: absolute;
+    top: 0; left: 0; width: 100%; height: 100%;
+    background: rgba(0,0,0,0.4);
+    z-index: 35;
+    display: none;
+    opacity: 0;
+    transition: opacity 0.3s;
+}
+.sidebar-overlay.active { display: block; opacity: 1; }
+.sidebar-nickname { font-size: 14px; font-weight: bold; color: #333; margin-top: 5px; margin-bottom: 5px; }
+.sidebar-menu { width: 100%; padding: 0 15px; }
+.sidebar-menu-item {
+    padding: 12px;
+    margin-bottom: 8px;
+    border-radius: 10px;
+    font-size: 14px;
+    color: #555;
+    cursor: pointer;
+    transition: 0.2s;
+    background: #f8f9fa;
+}
+.sidebar-menu-item:hover { background: #e8f5e9; color: #4CAF50; }
 .sidebar-avatar { width: 45px; height: 45px; border-radius: 50%; background-color: #ddd; background-size: cover; margin-bottom: 20px; }
 .divider { width: 40px; height: 1px; background: #e0e0e0; margin-bottom: 20px; }
 .book-item { width: 50px; height: 50px; background: white; border-radius: 12px; display: flex; justify-content: center; align-items: center; font-size: 12px; font-weight: bold; color: #555; border: 2px solid transparent; margin-bottom: 15px; }
 .book-item.active { border-color: #4CAF50; color: #4CAF50; }
 
-.main-content { flex: 1; background: white; display: flex; flex-direction: column; position: relative; }
+.main-content { flex: 1; background: white; display: flex; flex-direction: column; position: relative; width: 100%; padding-top: 50px; }
 .tab-content { display: none; flex-direction: column; height: 100%; padding: 20px; padding-bottom: 80px; position: relative; }
 .tab-content.active { display: flex; }
 .empty-state { flex: 1; display: flex; flex-direction: column; justify-content: center; align-items: center; color: #999; text-align: center; }
@@ -63,3 +103,172 @@ input[type="text"], input[type="tel"], input[type="date"], select { width: 100%;
 
 /* ====== 默写测试界面 ====== */
 .dictation-card { background: white; border-radius: 20px; padding: 30px 20px; box-shadow: 0 10px 30px rgba(0,0,0,0.05); border: 1px solid #eee; }
+
+/* ====== 听写模式 ====== */
+#dictate-play-btn { transition: transform 0.1s; }
+#dictate-play-btn:active { transform: scale(0.95); }
+#dictate-feedback.correct { background: #e8f5e9; color: #2e7d32; }
+#dictate-feedback.wrong { background: #ffebee; color: #c62828; }
+
+/* ====== 能量花园 ====== */
+.garden-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; }
+.water-badge { background: #e3f2fd; color: #1976d2; padding: 8px 14px; border-radius: 20px; font-size: 14px; font-weight: bold; }
+.garden-grid { flex: 1; display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; overflow-y: auto; padding-right: 5px; }
+.pot {
+    background: #f5f5f5; border: 2px solid #e0e0e0; border-radius: 16px;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    min-height: 140px; padding: 10px; transition: 0.3s; position: relative;
+}
+.pot.active { border-color: #81c784; background: #f1f8e9; }
+.pot.selected { border-color: #4CAF50; box-shadow: 0 0 0 3px rgba(76,175,80,0.2); }
+.pot-plant { font-size: 48px; line-height: 1; margin-bottom: 5px; transition: 0.3s; }
+.pot-name { font-size: 12px; color: #666; text-align: center; }
+.pot-stage { font-size: 11px; color: #888; margin-top: 2px; }
+.garden-actions { display: flex; gap: 10px; padding-top: 12px; border-top: 1px solid #eee; }
+.garden-actions button { flex: 1; }
+
+/* ====== 顶部 Header ====== */
+.main-header {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 50px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0 15px;
+    border-bottom: 1px solid #f0f0f0;
+    background: #fff;
+    z-index: 25;
+}
+.header-btn { font-size: 20px; cursor: pointer; padding: 5px; user-select: none; }
+.header-title { font-size: 16px; font-weight: bold; color: #333; }
+
+/* ====== 日历 ====== */
+.calendar-card { width: 90%; padding: 20px; }
+.calendar-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 15px;
+    font-size: 16px;
+    font-weight: bold;
+    color: #333;
+}
+.cal-nav { cursor: pointer; padding: 5px 10px; color: #4CAF50; font-size: 14px; user-select: none; }
+.calendar-grid {
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+    gap: 5px;
+    text-align: center;
+}
+.calendar-weekday { font-size: 12px; color: #888; padding: 5px; }
+.calendar-day {
+    aspect-ratio: 1;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    font-size: 14px;
+    color: #333;
+    border-radius: 8px;
+    cursor: pointer;
+    position: relative;
+    transition: 0.2s;
+}
+.calendar-day:hover { background: #f0f0f0; }
+.calendar-day.has-study { background: #e8f5e9; color: #2e7d32; font-weight: bold; }
+.calendar-day.empty { cursor: default; }
+.study-dot {
+    width: 5px;
+    height: 5px;
+    background: #4CAF50;
+    border-radius: 50%;
+    position: absolute;
+    bottom: 3px;
+}
+
+/* ====== 专注模式 ====== */
+.focus-overlay {
+    display: none;
+    position: absolute;
+    top: 0; left: 0; width: 100%; height: 100%;
+    background: linear-gradient(135deg, #f5f7fa 0%, #e4e8ec 100%);
+    z-index: 200;
+    flex-direction: column;
+    padding: 20px;
+}
+.focus-overlay.active { display: flex; }
+.focus-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 30px;
+    font-size: 14px;
+    color: #666;
+}
+.focus-exit { cursor: pointer; font-size: 14px; color: #999; }
+.focus-progress { font-weight: bold; color: #4CAF50; }
+.focus-scene {
+    flex: 1;
+    perspective: 1000px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    margin-bottom: 20px;
+}
+.focus-card {
+    width: 100%;
+    height: 320px;
+    position: relative;
+    transition: transform 0.6s cubic-bezier(0.4, 0.2, 0.2, 1);
+    transform-style: preserve-3d;
+    cursor: pointer;
+}
+.focus-card.is-flipped { transform: rotateY(180deg); }
+.focus-card-front, .focus-card-back {
+    position: absolute;
+    width: 100%;
+    height: 100%;
+    backface-visibility: hidden;
+    background: white;
+    border-radius: 20px;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.08);
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    text-align: center;
+    padding: 30px;
+}
+.focus-card-front h1 { font-size: 40px; color: #333; margin-bottom: 10px; }
+.focus-card-front p { font-size: 18px; color: #888; font-family: serif; }
+.focus-hint { position: absolute; bottom: 30px; font-size: 12px; color: #ccc; }
+.focus-card-back {
+    transform: rotateY(180deg);
+    border: 2px solid #4CAF50;
+}
+.focus-card-back h2 { font-size: 28px; margin-bottom: 20px; color: #333; }
+.focus-card-back p { font-size: 18px; color: #555; line-height: 1.6; }
+.focus-actions {
+    display: flex;
+    gap: 15px;
+    height: 55px;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.3s;
+    margin-bottom: 20px;
+}
+.focus-actions.show { opacity: 1; pointer-events: auto; }
+.focus-btn {
+    flex: 1;
+    border: none;
+    border-radius: 30px;
+    font-size: 16px;
+    font-weight: bold;
+    cursor: pointer;
+    color: white;
+}
+.focus-unknown { background: #f44336; }
+.focus-known { background: #4CAF50; }
