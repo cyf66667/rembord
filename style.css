@@ -76,7 +76,7 @@ input[type="text"], input[type="tel"], input[type="date"], select { width: 100%;
 .word-card { background: #f9fafb; border: 1px solid #eee; border-radius: 12px; padding: 15px; display: flex; flex-direction: column; gap: 10px; transition: 0.3s; }
 .word-card.handled { opacity: 0.5; background: #f0f0f0; border-color: #ddd; }
 .word-info { display: flex; justify-content: space-between; align-items: center; }
-.word-en { font-size: 18px; font-weight: bold; color: #222; }
+.word-en { font-size: 18px; font-weight: bold; color: #222; cursor: pointer; user-select: none; }
 .word-phonetic { font-size: 13px; color: #888; font-weight: normal; margin-left: 5px; font-family: serif; }
 .word-cn { font-size: 14px; color: #555; text-align: right; max-width: 55%; line-height: 1.4; }
 

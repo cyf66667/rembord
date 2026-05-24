@@ -109,20 +109,48 @@ function loadAppData() {
 window.closeModal = function(id) { document.getElementById(id).classList.remove('active'); }
 window.openModal = function(id) { document.getElementById(id).classList.add('active'); }
 
-// --- 1. 登录与初始化 ---
-document.getElementById('login-btn').addEventListener('click', () => {
-    document.getElementById('login-screen').classList.remove('active');
-    document.getElementById('setup-screen').classList.add('active');
-    
-    const todayStr = getTodayDateStr();
-    const nextMonth = new Date(); nextMonth.setDate(new Date().getDate() + 30);
-    document.getElementById('start-date').value = todayStr;
-    document.getElementById('end-date').value = nextMonth.toISOString().split('T')[0];
-});
+// --- API 辅助函数 ---
+async function apiPost(path, body) {
+    try {
+        const res = await fetch(path, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify(body)
+        });
+        return await res.json();
+    } catch (e) {
+        return { error: '网络错误，请通过 http://localhost:5000 访问并确保后端已启动' };
+    }
+}
+async function apiGet(path) {
+    try {
+        const res = await fetch(path, { credentials: 'include' });
+        return await res.json();
+    } catch (e) {
+        return { error: '网络错误' };
+    }
+}
+async function apiUpload(path, formData) {
+    try {
+        const res = await fetch(path, { method: 'POST', credentials: 'include', body: formData });
+        return await res.json();
+    } catch (e) {
+        return { error: '网络错误' };
+    }
+}
 
-document.getElementById('setup-btn').addEventListener('click', () => {
-    const nick = document.getElementById('nickname').value.trim();
-    if (nick) userData.nickname = nick;
+function updateAvatarUI(url) {
+    if (!url) return;
+    const els = ['avatar-preview', 'sidebar-avatar', 'profile-avatar'];
+    els.forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.style.backgroundImage = `url(${url})`;
+    });
+}
+
+function enterMainScreen() {
+    document.getElementById('login-screen').classList.remove('active');
     document.getElementById('setup-screen').classList.remove('active');
     document.getElementById('main-screen').classList.add('active');
     loadAppData();
@@ -131,7 +159,147 @@ document.getElementById('setup-btn').addEventListener('click', () => {
         saveAppData();
     }
     renderGarden();
-    document.getElementById('sidebar-nickname').innerText = userData.nickname;
+    document.getElementById('sidebar-nickname').innerText = userData.nickname || '同学';
+    updateAvatarUI(userData.avatar_url);
+}
+
+// --- 1. 登录与初始化 ---
+let authMode = 'login'; // 'login' | 'register'
+
+function setAuthMode(mode) {
+    authMode = mode;
+    const title = document.getElementById('auth-title');
+    const btn = document.getElementById('auth-btn');
+    const confirmGroup = document.getElementById('confirm-password-group');
+    const toggleText = document.getElementById('auth-toggle-text');
+    const toggleLink = document.getElementById('auth-toggle-link');
+    if (mode === 'login') {
+        title.innerText = '登录背单词';
+        btn.innerText = '登录';
+        confirmGroup.style.display = 'none';
+        toggleText.innerText = '还没有账号？';
+        toggleLink.innerText = '立即注册';
+    } else {
+        title.innerText = '注册账号';
+        btn.innerText = '注册';
+        confirmGroup.style.display = 'block';
+        toggleText.innerText = '已有账号？';
+        toggleLink.innerText = '立即登录';
+    }
+}
+
+document.getElementById('auth-toggle-link').addEventListener('click', (e) => {
+    e.preventDefault();
+    setAuthMode(authMode === 'login' ? 'register' : 'login');
+});
+
+document.getElementById('auth-btn').addEventListener('click', async () => {
+    const phone = document.getElementById('phone').value.trim();
+    const password = document.getElementById('password').value.trim();
+    const confirm = document.getElementById('confirm-password').value.trim();
+
+    if (!phone || !password) return alert('请填写手机号和密码');
+    if (authMode === 'register' && password !== confirm) return alert('两次密码不一致');
+
+    const endpoint = authMode === 'login' ? '/api/login' : '/api/register';
+    const payload = { phone, password, nickname: '' };
+    const data = await apiPost(endpoint, payload);
+
+    if (data.error) return alert(data.error);
+
+    userData.phone = data.user.phone;
+    userData.nickname = data.user.nickname || '同学';
+    userData.avatar_url = data.user.avatar_url || '';
+    saveAppData();
+
+    if (authMode === 'register' || !data.user.nickname) {
+        // 新用户或没有昵称，进入完善信息
+        document.getElementById('login-screen').classList.remove('active');
+        document.getElementById('setup-screen').classList.add('active');
+        const todayStr = getTodayDateStr();
+        const nextMonth = new Date(); nextMonth.setDate(new Date().getDate() + 30);
+        document.getElementById('start-date').value = todayStr;
+        document.getElementById('end-date').value = nextMonth.toISOString().split('T')[0];
+    } else {
+        enterMainScreen();
+    }
+});
+
+// 头像上传辅助
+function bindAvatarInput(inputId, previewId) {
+    const input = document.getElementById(inputId);
+    const preview = document.getElementById(previewId);
+    preview.addEventListener('click', () => input.click());
+    input.addEventListener('change', async () => {
+        if (!input.files || !input.files[0]) return;
+        const fd = new FormData();
+        fd.append('avatar', input.files[0]);
+        const data = await apiUpload('/api/avatar', fd);
+        if (data.error) return alert(data.error);
+        userData.avatar_url = data.avatar_url;
+        saveAppData();
+        updateAvatarUI(data.avatar_url);
+    });
+}
+bindAvatarInput('avatar-input', 'avatar-preview');
+bindAvatarInput('profile-avatar-input', 'profile-avatar');
+
+document.getElementById('setup-btn').addEventListener('click', async () => {
+    const nick = document.getElementById('nickname').value.trim();
+    if (nick) userData.nickname = nick;
+    saveAppData();
+    enterMainScreen();
+});
+
+// 页面加载时检查登录状态
+(async function initAuth() {
+    const data = await apiGet('/api/me');
+    if (data.user) {
+        userData.phone = data.user.phone;
+        userData.nickname = data.user.nickname || '同学';
+        userData.avatar_url = data.user.avatar_url || '';
+        saveAppData();
+        enterMainScreen();
+    }
+})();
+
+// --- 账户信息与退出 ---
+document.getElementById('sidebar-profile-btn').addEventListener('click', async () => {
+    window.toggleSidebar();
+    const data = await apiGet('/api/me');
+    if (data.error) return alert(data.error);
+    const u = data.user;
+    document.getElementById('profile-phone').value = u.phone || '';
+    document.getElementById('profile-nickname').value = u.nickname || '';
+    document.getElementById('profile-created').value = u.created_at ? u.created_at.split('T')[0] : '';
+    updateAvatarUI(u.avatar_url);
+    window.openModal('profile-modal');
+});
+
+document.getElementById('profile-save-btn').addEventListener('click', async () => {
+    const nick = document.getElementById('profile-nickname').value.trim();
+    if (!nick) return alert('昵称不能为空');
+    // 目前后端没有 /api/update 接口，先更新本地，后续可扩展
+    userData.nickname = nick;
+    saveAppData();
+    document.getElementById('sidebar-nickname').innerText = nick;
+    alert('保存成功');
+    window.closeModal('profile-modal');
+});
+
+async function doLogout() {
+    await apiPost('/api/logout', {});
+    localStorage.removeItem(STORAGE_KEY);
+    location.reload();
+}
+
+document.getElementById('sidebar-logout-btn').addEventListener('click', () => {
+    window.toggleSidebar();
+    if (confirm('确定要退出登录吗？')) doLogout();
+});
+
+document.getElementById('profile-logout-btn').addEventListener('click', () => {
+    if (confirm('确定要退出登录吗？')) doLogout();
 });
 
 // 底部 Tab
@@ -186,8 +354,8 @@ function renderWordList(bookName) {
         wordEl.className = 'word-card';
         wordEl.dataset.index = index; 
         wordEl.innerHTML = `
-            <div class="word-info">
-                <div class="word-en">${wordData.word}</div>
+            <div class="word-info" ondblclick="window.open('https://dict.youdao.com/result?word=${encodeURIComponent(wordData.word)}', '_blank')" title="双击查看详细释义">
+                <div class="word-en" onclick="event.stopPropagation(); speakWord('${wordData.word}')">${wordData.word} 🔊</div>
                 <div class="word-cn">${wordData.translation || '暂无'}</div>
             </div>
             <div class="word-actions">
