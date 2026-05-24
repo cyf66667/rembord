@@ -544,3 +544,145 @@ document.getElementById('water-btn').addEventListener('click', () => {
     saveAppData();
     renderGarden();
 });
+
+// --- 8. 侧边栏逻辑 ---
+window.toggleSidebar = function() {
+    const sidebar = document.getElementById('sidebar');
+    const overlay = document.getElementById('sidebar-overlay');
+    sidebar.classList.toggle('open');
+    overlay.classList.toggle('active');
+}
+
+document.getElementById('menu-btn').addEventListener('click', window.toggleSidebar);
+
+document.getElementById('sidebar-unfamiliar-btn').addEventListener('click', () => {
+    window.toggleSidebar();
+    renderUnfamiliarModal();
+});
+
+// --- 9. 日历逻辑 ---
+document.getElementById('calendar-btn').addEventListener('click', () => {
+    renderCalendar();
+    window.openModal('calendar-modal');
+});
+
+document.getElementById('cal-prev').addEventListener('click', () => {
+    currentCalendarDate.setMonth(currentCalendarDate.getMonth() - 1);
+    renderCalendar();
+});
+
+document.getElementById('cal-next').addEventListener('click', () => {
+    currentCalendarDate.setMonth(currentCalendarDate.getMonth() + 1);
+    renderCalendar();
+});
+
+function renderCalendar() {
+    const grid = document.getElementById('calendar-grid');
+    const monthYear = document.getElementById('cal-month-year');
+    const year = currentCalendarDate.getFullYear();
+    const month = currentCalendarDate.getMonth();
+
+    monthYear.innerText = `${year}年 ${month + 1}月`;
+
+    const firstDay = new Date(year, month, 1).getDay();
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+
+    let html = '';
+    const weekdays = ['日', '一', '二', '三', '四', '五', '六'];
+    weekdays.forEach(d => {
+        html += `<div class="calendar-weekday">${d}</div>`;
+    });
+
+    for (let i = 0; i < firstDay; i++) {
+        html += '<div class="calendar-day empty"></div>';
+    }
+
+    for (let day = 1; day <= daysInMonth; day++) {
+        const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+        const hasStudy = studyHistory[dateStr] && studyHistory[dateStr].length > 0;
+        const cls = hasStudy ? 'calendar-day has-study' : 'calendar-day';
+        const dot = hasStudy ? '<div class="study-dot"></div>' : '';
+        html += `<div class="${cls}" onclick="${hasStudy ? `showDayWords('${dateStr}')` : ''}">${day}${dot}</div>`;
+    }
+
+    grid.innerHTML = html;
+}
+
+window.showDayWords = function(dateStr) {
+    const words = studyHistory[dateStr] || [];
+    document.getElementById('day-words-title').innerText = `📅 ${dateStr} 学习记录`;
+    const container = document.getElementById('day-words-content');
+    if (words.length === 0) {
+        container.innerHTML = '<p style="text-align:center; color:#999; margin-top:50px;">当日无学习记录</p>';
+    } else {
+        container.innerHTML = words.map(w => `
+            <div class="unfamiliar-item">
+                <span style="font-weight:bold;">${w.word}</span>
+                <span style="color:#666;">${w.translation || ''}</span>
+            </div>
+        `).join('');
+    }
+    window.openModal('day-words-modal');
+}
+
+// --- 10. 专注模式逻辑 ---
+document.getElementById('focus-mode-btn').addEventListener('click', () => {
+    if (dailyWords.length === 0) {
+        alert('请先生成今日学习任务！');
+        return;
+    }
+    focusQueue = shuffleArray([...dailyWords]);
+    focusIndex = 0;
+    focusFlipped = false;
+    renderFocusCard();
+    document.getElementById('focus-overlay').classList.add('active');
+});
+
+document.getElementById('focus-exit-btn').addEventListener('click', () => {
+    document.getElementById('focus-overlay').classList.remove('active');
+});
+
+const focusCard = document.getElementById('focus-card');
+focusCard.addEventListener('click', () => {
+    focusFlipped = !focusFlipped;
+    focusCard.classList.toggle('is-flipped', focusFlipped);
+    document.getElementById('focus-actions').classList.toggle('show', focusFlipped);
+});
+
+document.getElementById('focus-btn-known').addEventListener('click', (e) => {
+    e.stopPropagation();
+    nextFocusCard();
+});
+
+document.getElementById('focus-btn-unknown').addEventListener('click', (e) => {
+    e.stopPropagation();
+    const wordData = focusQueue[focusIndex];
+    const todayStr = getTodayDateStr();
+    if (!unfamiliarBook[todayStr]) unfamiliarBook[todayStr] = [];
+    const exists = unfamiliarBook[todayStr].find(w => w.word === wordData.word);
+    if (!exists) unfamiliarBook[todayStr].push(wordData);
+    saveAppData();
+    nextFocusCard();
+});
+
+function renderFocusCard() {
+    const wordData = focusQueue[focusIndex];
+    focusFlipped = false;
+    focusCard.classList.remove('is-flipped');
+    document.getElementById('focus-actions').classList.remove('show');
+    document.getElementById('focus-progress').innerText = `${focusIndex + 1} / ${focusQueue.length}`;
+    document.getElementById('focus-word').innerText = wordData.word;
+    document.getElementById('focus-phonetic').innerText = wordData.phonetic || '';
+    document.getElementById('focus-word-back').innerText = wordData.word;
+    document.getElementById('focus-translation').innerText = wordData.translation || '暂无释义';
+}
+
+function nextFocusCard() {
+    focusIndex++;
+    if (focusIndex < focusQueue.length) {
+        renderFocusCard();
+    } else {
+        alert('🎉 专注模式完成！');
+        document.getElementById('focus-overlay').classList.remove('active');
+    }
+}
