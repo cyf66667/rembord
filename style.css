@@ -1,0 +1,65 @@
+* { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Segoe UI', sans-serif; }
+body { background-color: #f4f7f6; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
+.app-container { width: 375px; height: 667px; background: white; border-radius: 20px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); overflow: hidden; position: relative; }
+
+.screen { display: none; height: 100%; flex-direction: column; padding: 30px; position: relative; }
+.screen.active { display: flex; }
+.main-layout { padding: 0; flex-direction: row !important; }
+h2 { font-size: 24px; color: #333; margin-top: 40px; margin-bottom: 10px; }
+.subtitle { color: #888; font-size: 14px; margin-bottom: 40px; }
+
+.input-group { margin-bottom: 15px; width: 100%; }
+input[type="text"], input[type="tel"], input[type="date"], select { width: 100%; padding: 12px; border: 1px solid #ddd; border-radius: 10px; font-size: 14px; outline: none; background: white; margin-top: 5px; }
+.btn { width: 100%; padding: 15px; background: #4CAF50; color: white; border: none; border-radius: 10px; font-size: 16px; font-weight: bold; cursor: pointer; transition: 0.3s; }
+.btn:disabled { background: #a5d6a7; cursor: not-allowed; }
+
+.avatar-preview { width: 80px; height: 80px; border-radius: 50%; background-color: #eee; margin: 0 auto 30px; background-size: cover; border: 2px solid #ddd; cursor: pointer; }
+.sidebar { width: 75px; background: #f8f9fa; border-right: 1px solid #eee; display: flex; flex-direction: column; align-items: center; padding: 20px 0; z-index: 10; }
+.sidebar-avatar { width: 45px; height: 45px; border-radius: 50%; background-color: #ddd; background-size: cover; margin-bottom: 20px; }
+.divider { width: 40px; height: 1px; background: #e0e0e0; margin-bottom: 20px; }
+.book-item { width: 50px; height: 50px; background: white; border-radius: 12px; display: flex; justify-content: center; align-items: center; font-size: 12px; font-weight: bold; color: #555; border: 2px solid transparent; margin-bottom: 15px; }
+.book-item.active { border-color: #4CAF50; color: #4CAF50; }
+
+.main-content { flex: 1; background: white; display: flex; flex-direction: column; position: relative; }
+.tab-content { display: none; flex-direction: column; height: 100%; padding: 20px; padding-bottom: 80px; position: relative; }
+.tab-content.active { display: flex; }
+.empty-state { flex: 1; display: flex; flex-direction: column; justify-content: center; align-items: center; color: #999; text-align: center; }
+
+.bottom-nav { position: absolute; bottom: 0; left: 0; width: 100%; height: 65px; background: white; border-top: 1px solid #f0f0f0; display: flex; z-index: 20; }
+.nav-item { flex: 1; display: flex; justify-content: center; align-items: center; font-size: 14px; color: #999; cursor: pointer; }
+.nav-item.active { color: #4CAF50; font-weight: bold; }
+
+/* 单词列表 */
+.word-list-header { font-size: 18px; font-weight: bold; color: #333; margin-bottom: 15px; display: flex; justify-content: space-between; align-items: center; }
+.word-list-container { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 15px; padding-right: 5px; margin-bottom: 15px; }
+
+.word-card { background: #f9fafb; border: 1px solid #eee; border-radius: 12px; padding: 15px; display: flex; flex-direction: column; gap: 10px; transition: 0.3s; }
+.word-card.handled { opacity: 0.5; background: #f0f0f0; border-color: #ddd; }
+.word-info { display: flex; justify-content: space-between; align-items: center; }
+.word-en { font-size: 18px; font-weight: bold; color: #222; }
+.word-phonetic { font-size: 13px; color: #888; font-weight: normal; margin-left: 5px; font-family: serif; }
+.word-cn { font-size: 14px; color: #555; text-align: right; max-width: 55%; line-height: 1.4; }
+
+.word-actions { display: flex; gap: 8px; border-top: 1px dashed #eee; padding-top: 10px; }
+.word-action-btn { flex: 1; padding: 8px 0; border: none; border-radius: 6px; font-size: 12px; font-weight: bold; cursor: pointer; color: white; transition: 0.2s; }
+.btn-known { background: #4CAF50; }     
+.btn-familiar { background: #FF9800; }  
+.btn-unfamiliar { background: #F44336; }
+
+/* ====== 新增：底部操作区 ====== */
+.learning-actions { display: flex; flex-direction: column; gap: 10px; padding-top: 10px; border-top: 1px solid #eee; }
+.action-outline-btn { width: 100%; padding: 12px; background: white; color: #333; border: 1px solid #ddd; border-radius: 10px; font-size: 14px; font-weight: bold; cursor: pointer; }
+.action-primary-btn { width: 100%; padding: 12px; background: #4CAF50; color: white; border: none; border-radius: 10px; font-size: 14px; font-weight: bold; cursor: pointer; }
+
+/* ====== 弹窗与生词本样式 ====== */
+.modal-overlay { display: none; position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 50; justify-content: center; align-items: center; }
+.modal-overlay.active { display: flex; }
+.modal-card { width: 85%; max-height: 80%; background: white; border-radius: 20px; padding: 25px; position: relative; }
+.close-modal { position: absolute; top: 15px; right: 20px; font-size: 24px; color: #999; cursor: pointer; }
+
+.date-group { margin-bottom: 20px; }
+.date-header { font-size: 14px; font-weight: bold; color: #2196F3; margin-bottom: 10px; border-bottom: 1px solid #eee; padding-bottom: 5px; }
+.unfamiliar-item { display: flex; justify-content: space-between; font-size: 14px; padding: 8px 0; border-bottom: 1px dashed #f0f0f0; }
+
+/* ====== 默写测试界面 ====== */
+.dictation-card { background: white; border-radius: 20px; padding: 30px 20px; box-shadow: 0 10px 30px rgba(0,0,0,0.05); border: 1px solid #eee; }
