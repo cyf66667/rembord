@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
-    <title>背单词 App</title>
+    <title>Rembord</title>
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -10,7 +10,9 @@
 <div class="app-container" id="app">
     
     <div id="login-screen" class="screen active">
-        <h2 id="auth-title">登录背单词</h2><p class="subtitle">记录你的每一次进步</p>
+        <div class="login-brand">Rembord</div>
+        <div class="login-mascot"><span></span></div>
+        <h2 id="auth-title">登录 Rembord</h2><p class="subtitle">和线条小狗一起轻松背单词</p>
         <div class="input-group"><input type="tel" id="phone" placeholder="请输入手机号"></div>
         <div class="input-group"><input type="password" id="password" placeholder="请输入密码"></div>
         <div class="input-group" id="confirm-password-group" style="display:none;"><input type="password" id="confirm-password" placeholder="请确认密码"></div>
@@ -40,6 +42,8 @@
             <div class="divider"></div>
             <div class="sidebar-menu">
                 <div class="sidebar-menu-item" id="sidebar-unfamiliar-btn">📖 查看生词本</div>
+                <div class="sidebar-menu-item" id="sidebar-stats-btn">📊 查看学习数据</div>
+                <div class="sidebar-menu-item" id="sidebar-flower-room-btn">🏡 我的花房</div>
                 <div class="sidebar-menu-item" id="sidebar-profile-btn">👤 账户信息</div>
                 <div class="sidebar-menu-item" id="sidebar-logout-btn" style="color:#f44336;">🚪 退出登录</div>
             </div>
@@ -47,8 +51,11 @@
 
         <div class="main-header">
             <span class="header-btn" id="menu-btn">☰</span>
-            <span class="header-title">背单词</span>
-            <span class="header-btn" id="calendar-btn">📅</span>
+            <span class="header-title">Rembord</span>
+            <div class="header-actions">
+                <span class="header-btn" id="search-btn">🔍</span>
+                <span class="header-btn" id="calendar-btn">📅</span>
+            </div>
         </div>
 
         <div class="main-content">
@@ -64,8 +71,10 @@
                             <option value="cet6">六级高频词汇</option>
                             <option value="ielts">雅思红宝书</option>
                             <option value="kaoyan">考研必背词汇</option>
+                            <option value="__custom__">＋ 添加自定义词库</option>
                         </select>
                     </div>
+                    <input type="file" id="custom-book-file" accept=".json,.csv,.txt" style="display:none;">
                     <div class="input-group" style="display:flex; gap:10px; text-align: left;">
                         <div style="flex:1;">
                             <label style="font-size:12px; color:#aaa;">开始日期</label>
@@ -87,10 +96,8 @@
                     
                     <div class="word-list-container" id="word-list-container"></div>
                     
-                    <div class="learning-actions">
-                        <button class="action-outline-btn" id="focus-mode-btn">🧘 专注模式</button>
-                        <button class="action-primary-btn" id="setup-dictation-btn">✍️ 默写已背单词</button>
-                    </div>
+                    <button class="focus-float-btn" id="focus-mode-btn" title="专注模式">🧘</button>
+                    <button id="setup-dictation-btn" style="display:none;">默写已背单词</button>
                 </div>
             </div>
 
@@ -152,8 +159,9 @@
                 </div>
                 <div class="garden-grid" id="garden-grid"></div>
                 <div class="garden-actions">
-                    <button class="action-primary-btn" id="plant-btn">🌱 播种 (5💧)</button>
-                    <button class="action-outline-btn" id="water-btn">💧 浇水 (3💧)</button>
+                    <select id="plant-type-select" class="plant-type-select"></select>
+                    <button class="action-primary-btn" id="plant-btn">🌱 播种 (12💧)</button>
+                    <button class="action-outline-btn" id="water-btn">💧 浇水 (8💧)</button>
                 </div>
             </div>
 
@@ -171,6 +179,34 @@
             <h3 style="margin-bottom: 20px;">📖 我的生词本</h3>
             <div id="unfamiliar-content" style="flex:1; overflow-y: auto;">
                 </div>
+        </div>
+    </div>
+
+    <div class="modal-overlay" id="word-family-modal">
+        <div class="modal-card family-modal-card">
+            <div class="close-modal" onclick="closeModal('word-family-modal')">×</div>
+            <h3 id="family-word-title" style="margin-bottom: 16px;">我的家族</h3>
+            <div id="family-content" class="family-content"></div>
+        </div>
+    </div>
+
+    <div class="modal-overlay" id="search-modal">
+        <div class="modal-card search-modal-card">
+            <div class="close-modal" onclick="closeModal('search-modal')">×</div>
+            <h3 style="margin-bottom: 14px;">🔍 单词搜索</h3>
+            <div class="search-box">
+                <input type="text" id="search-input" placeholder="输入中文查英文，或输入英文联网查询">
+                <button id="search-submit-btn">搜索</button>
+            </div>
+            <div id="search-result" class="search-result"></div>
+        </div>
+    </div>
+
+    <div class="modal-overlay" id="flower-room-modal">
+        <div class="modal-card" style="height: 80%; display: flex; flex-direction: column;">
+            <div class="close-modal" onclick="closeModal('flower-room-modal')">×</div>
+            <h3 style="margin-bottom: 16px;">🏡 我的花房</h3>
+            <div id="flower-room-content" class="flower-room-content"></div>
         </div>
     </div>
 
@@ -238,6 +274,19 @@
         </div>
     </div>
 
+    <div class="modal-overlay" id="stats-modal">
+        <div class="modal-card stats-modal-card">
+            <div class="close-modal" onclick="closeModal('stats-modal')">×</div>
+            <h3 style="margin-bottom: 12px;">📊 学习数据</h3>
+            <div class="stats-range">
+                <button data-days="7" class="active">7天</button>
+                <button data-days="14">14天</button>
+                <button data-days="30">30天</button>
+            </div>
+            <div id="stats-content" class="stats-content"></div>
+        </div>
+    </div>
+
     <!-- 专注模式覆盖层 -->
     <div class="focus-overlay" id="focus-overlay">
         <div class="focus-header">
@@ -291,6 +340,6 @@
 
 </div>
 
-<script type="module" src="main.js"></script>
+<script defer src="main.js"></script>
 </body>
 </html>

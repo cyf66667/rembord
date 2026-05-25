@@ -1,5 +1,8 @@
 import os
 import uuid
+import json
+import urllib.parse
+import urllib.request
 from flask import Flask, request, jsonify, send_from_directory, session
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
@@ -34,6 +37,22 @@ def init_db():
                     nickname VARCHAR(50),
                     avatar_url VARCHAR(255),
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS study_records (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    user_id INT NOT NULL,
+                    study_date DATE NOT NULL,
+                    word VARCHAR(100) NOT NULL,
+                    phonetic VARCHAR(255),
+                    translation TEXT,
+                    category VARCHAR(32),
+                    source VARCHAR(32),
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE KEY uniq_user_date_word (user_id, study_date, word),
+                    INDEX idx_user_date (user_id, study_date),
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
                 )
             """)
         conn.commit()
@@ -150,6 +169,88 @@ def upload_avatar():
 @app.route('/uploads/avatars/<path:filename>')
 def uploaded_file(filename):
     return send_from_directory(UPLOAD_FOLDER, filename)
+
+@app.route('/api/study-records', methods=['GET'])
+def get_study_records():
+    user_id = session.get('user_id')
+    if not user_id:
+        return jsonify({'error': '未登录'}), 401
+    conn = get_db()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute("USE rembord")
+            cursor.execute("""
+                SELECT study_date, word, phonetic, translation, category, source
+                FROM study_records
+                WHERE user_id = %s
+                ORDER BY study_date DESC, created_at ASC
+            """, (user_id,))
+            rows = cursor.fetchall()
+            history = {}
+            for row in rows:
+                date_key = row['study_date'].isoformat() if hasattr(row['study_date'], 'isoformat') else str(row['study_date'])
+                history.setdefault(date_key, []).append({
+                    'word': row['word'],
+                    'phonetic': row.get('phonetic') or '',
+                    'translation': row.get('translation') or '',
+                    'category': row.get('category') or '',
+                    'source': row.get('source') or ''
+                })
+            return jsonify({'history': history})
+    finally:
+        conn.close()
+
+@app.route('/api/study-records', methods=['POST'])
+def save_study_record():
+    user_id = session.get('user_id')
+    if not user_id:
+        return jsonify({'error': '未登录'}), 401
+    data = request.get_json() or {}
+    word = (data.get('word') or '').strip()
+    if not word:
+        return jsonify({'error': '单词不能为空'}), 400
+    study_date = (data.get('date') or '').strip()
+    if not study_date:
+        return jsonify({'error': '日期不能为空'}), 400
+    conn = get_db()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute("USE rembord")
+            cursor.execute("""
+                INSERT INTO study_records (user_id, study_date, word, phonetic, translation, category, source)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE
+                    phonetic = VALUES(phonetic),
+                    translation = VALUES(translation),
+                    category = VALUES(category),
+                    source = VALUES(source)
+            """, (
+                user_id,
+                study_date,
+                word,
+                data.get('phonetic') or '',
+                data.get('translation') or '',
+                data.get('category') or '',
+                data.get('source') or ''
+            ))
+            conn.commit()
+            return jsonify({'success': True})
+    finally:
+        conn.close()
+
+@app.route('/api/dictionary/<path:word>')
+def dictionary_lookup(word):
+    clean_word = ''.join(ch for ch in word.strip().lower() if ch.isalpha() or ch == '-')
+    if not clean_word:
+        return jsonify({'error': '请输入英文单词'}), 400
+    url = f"https://api.dictionaryapi.dev/api/v2/entries/en/{urllib.parse.quote(clean_word)}"
+    try:
+        req = urllib.request.Request(url, headers={'User-Agent': 'Rembord/1.0'})
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            data = json.loads(resp.read().decode('utf-8'))
+            return jsonify({'entries': data})
+    except Exception:
+        return jsonify({'error': '联网词典暂时不可用'}), 502
 
 @app.route('/api/logout', methods=['POST'])
 def logout():

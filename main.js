@@ -1,10 +1,11 @@
-import { loadVocabularyBook } from './modules/study/study.js';
-
 const STORAGE_KEY = 'rembord_data';
 
 let userData = { phone: '', nickname: '同学' };
 let dailyWords = []; // 今天展示的词汇
 let todayHandledWords = []; // 今天用户点击过选项的词汇（作为默写基础）
+let currentBook = { key: '', name: '', words: [], cursor: 0, dailyQuota: 20 };
+let bookProgress = {};
+let vocabularyCache = {};
 
 // 模拟的”以前背诵的单词库” (用于抽取10个随机词)
 let mockPastLearnedWords = [
@@ -28,7 +29,14 @@ let unfamiliarBook = {};
 
 // 学习历史：按日期归档所有处理过的单词
 let studyHistory = {};
+let reviewSchedule = {};
+let learningStats = {};
 let currentCalendarDate = new Date();
+let sessionStartTime = Date.now();
+
+// 词根/词族数据：由 data/word_family.json 离线提供
+let wordFamilyData = null;
+let onlineFamilyCache = {};
 
 // 专注模式状态
 let focusQueue = [];
@@ -50,7 +58,8 @@ let dictateWrong = 0;
 let gardenState = {
     water: 0,
     pots: [], // { plant: null | { stage, waterCount, type } }
-    selectedPot: -1
+    selectedPot: -1,
+    flowerRoom: []
 };
 const PLANT_TYPES = ['🌻 向日葵', '🌹 玫瑰', '🌷 郁金香', '🌼 雏菊'];
 const PLANT_EMOJIS = [
@@ -60,6 +69,9 @@ const PLANT_EMOJIS = [
     ['🌰', '🌱', '🌿', '🌼']
 ];
 const STAGE_NAMES = ['种子', '发芽', '幼苗', '开花'];
+const PLANT_COST = 12;
+const WATER_COST = 8;
+const HARVEST_REWARD = 18;
 
 // --- 0. 工具函数 ---
 function shuffleArray(array) {
@@ -74,6 +86,324 @@ function getTodayDateStr() {
     return new Date().toISOString().split('T')[0]; // 例如: 2026-05-24
 }
 
+function addDays(dateStr, days) {
+    const date = new Date(dateStr);
+    date.setDate(date.getDate() + days);
+    return date.toISOString().split('T')[0];
+}
+
+function getDateRange(startDate, endDate) {
+    const dates = [];
+    const start = new Date(startDate);
+    const end = new Date(endDate);
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end < start) return dates;
+    for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+        dates.push(d.toISOString().split('T')[0]);
+    }
+    return dates;
+}
+
+function calculateDailyQuota(totalWords, startDateValue, endDateValue) {
+    const start = startDateValue ? new Date(startDateValue) : new Date();
+    const end = endDateValue ? new Date(endDateValue) : start;
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end < start) return 20;
+    const dayMs = 24 * 60 * 60 * 1000;
+    const days = Math.max(1, Math.floor((end - start) / dayMs) + 1);
+    return Math.max(1, Math.ceil(totalWords / days));
+}
+
+function getBookName(bookKey) {
+    const names = {
+        cet4: '四级核心词汇',
+        cet6: '六级高频词汇',
+        ielts: '雅思红宝书',
+        kaoyan: '考研必背词汇'
+    };
+    return names[bookKey] || bookKey || '词库';
+}
+
+async function getVocabularyBook(bookKey) {
+    if (!bookKey) return [];
+    if (bookProgress[bookKey]?.customWords) return bookProgress[bookKey].customWords;
+    if (!vocabularyCache[bookKey]) {
+        vocabularyCache[bookKey] = await loadVocabularyBook(bookKey);
+    }
+    return vocabularyCache[bookKey];
+}
+
+async function loadVocabularyBook(bookKey) {
+    try {
+        const response = await fetch(`./data/${bookKey}.json`);
+        if (!response.ok) throw new Error(`无法读取文件: ${bookKey}.json`);
+        return await response.json();
+    } catch (error) {
+        console.error('词库读取失败:', error);
+        alert('词库文件读取失败。如果你是双击打开页面，部分浏览器可能会限制读取本地 JSON。建议运行 server.py 或 python -m http.server 后访问 http://localhost:端口。');
+        return [];
+    }
+}
+
+function escapeHtml(value) {
+    return String(value ?? '').replace(/[&<>"']/g, char => ({
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        "'": '&#39;'
+    }[char]));
+}
+
+function cleanTranslation(value) {
+    return String(value || '暂无')
+        .replace(/\\n/g, '；')
+        .replace(/\/n/g, '；')
+        .replace(/\n/g, '；')
+        .replace(/\s*；\s*/g, '；')
+        .replace(/；+/g, '；')
+        .replace(/^；|；$/g, '');
+}
+
+async function ensureWordFamilyData() {
+    if (wordFamilyData) return wordFamilyData;
+    try {
+        const res = await fetch('./data/word_family.json');
+        if (!res.ok) throw new Error('word_family.json load failed');
+        wordFamilyData = await res.json();
+    } catch (error) {
+        console.error('词族数据加载失败', error);
+        wordFamilyData = { families: {} };
+    }
+    return wordFamilyData;
+}
+
+function normalizeWord(word) {
+    return String(word || '').toLowerCase().replace(/[^a-z-]/g, '');
+}
+
+function renderWordFamilyButton(word) {
+    return `<button class="family-btn" onclick="event.stopPropagation(); showWordFamily('${escapeHtml(word)}')">我的家族</button>`;
+}
+
+const BASIC_AFFIX_RULES = [
+    {
+        type: 'prefix',
+        value: 'dis-',
+        raw: 'dis',
+        meaning: '不、否定；分离、相反、除去',
+        className: 'prefix',
+        minRest: 3,
+        exceptions: ['disc', 'discipline', 'disco', 'discover', 'discovery', 'discuss', 'discussion', 'disease']
+    },
+    {
+        type: 'prefix',
+        value: 'in-',
+        raw: 'in',
+        meaning: '不、无、非；也可表示“在内、进入”',
+        className: 'prefix',
+        minRest: 3,
+        exceptions: ['inch', 'income', 'indeed', 'index', 'industry', 'infant', 'inside', 'instead', 'instrument', 'interest', 'internet', 'into']
+    },
+    {
+        type: 'prefix',
+        value: 'im-',
+        raw: 'im',
+        meaning: 'in- 的变体：不、无、非；常用于 b/m/p 前',
+        className: 'prefix',
+        minRest: 3,
+        exceptions: ['image', 'imagine', 'imitate', 'immune', 'impact']
+    },
+    {
+        type: 'prefix',
+        value: 'il-',
+        raw: 'il',
+        meaning: 'in- 的变体：不、无、非；常用于 l 前',
+        className: 'prefix',
+        minRest: 3,
+        exceptions: ['ill', 'illusion', 'illustrate']
+    },
+    {
+        type: 'prefix',
+        value: 'ir-',
+        raw: 'ir',
+        meaning: 'in- 的变体：不、无、非；常用于 r 前',
+        className: 'prefix',
+        minRest: 3,
+        exceptions: ['iron']
+    },
+    {
+        type: 'suffix',
+        value: '-tion',
+        raw: 'tion',
+        meaning: '名词后缀：行为、过程、结果、状态',
+        className: 'noun-forming suffix',
+        minStem: 3
+    },
+    {
+        type: 'suffix',
+        value: '-sion',
+        raw: 'sion',
+        meaning: '名词后缀：行为、过程、结果、状态',
+        className: 'noun-forming suffix',
+        minStem: 3
+    },
+    {
+        type: 'suffix',
+        value: '-ion',
+        raw: 'ion',
+        meaning: '名词后缀：行为、过程、结果、状态',
+        className: 'noun-forming suffix',
+        minStem: 3
+    },
+    {
+        type: 'suffix',
+        value: '-ment',
+        raw: 'ment',
+        meaning: '名词后缀：行为、过程、结果、实例',
+        className: 'noun-forming suffix',
+        minStem: 3
+    },
+    {
+        type: 'suffix',
+        value: '-ness',
+        raw: 'ness',
+        meaning: '名词后缀：性质、状态',
+        className: 'noun-forming suffix',
+        minStem: 3
+    },
+    {
+        type: 'suffix',
+        value: '-less',
+        raw: 'less',
+        meaning: '形容词后缀：没有、缺少',
+        className: 'adjective-forming suffix',
+        minStem: 3
+    },
+    {
+        type: 'suffix',
+        value: '-able',
+        raw: 'able',
+        meaning: '形容词后缀：能够……的、可被……的',
+        className: 'adjective-forming suffix',
+        minStem: 3
+    },
+    {
+        type: 'suffix',
+        value: '-ible',
+        raw: 'ible',
+        meaning: '形容词后缀：能够……的、可被……的',
+        className: 'adjective-forming suffix',
+        minStem: 3
+    }
+];
+
+function getBasicAffixAnalysis(word, existingRoots = []) {
+    const normalized = normalizeWord(word);
+    const existing = new Set(existingRoots.map(root => String(root.root || '').toLowerCase()));
+    const result = [];
+    const matchedPrefixRanges = [];
+    const matchedSuffixRanges = [];
+
+    BASIC_AFFIX_RULES.forEach(rule => {
+        if (existing.has(rule.value.toLowerCase()) || existing.has(rule.raw.toLowerCase())) return;
+
+        if (rule.type === 'prefix') {
+            if (!normalized.startsWith(rule.raw)) return;
+            if (rule.exceptions?.includes(normalized)) return;
+            const rest = normalized.slice(rule.raw.length);
+            if (rest.length < rule.minRest) return;
+            if (matchedPrefixRanges.some(length => length >= rule.raw.length)) return;
+            matchedPrefixRanges.push(rule.raw.length);
+        } else {
+            if (!normalized.endsWith(rule.raw)) return;
+            const stem = normalized.slice(0, -rule.raw.length);
+            if (stem.length < rule.minStem) return;
+            if (matchedSuffixRanges.some(length => length >= rule.raw.length)) return;
+            matchedSuffixRanges.push(rule.raw.length);
+        }
+
+        result.push({
+            root: rule.value,
+            meaning: rule.meaning,
+            class: rule.className,
+            origin: '基础词缀规则',
+            source: 'rule'
+        });
+    });
+
+    return result;
+}
+
+function uniqWords(words, limit = 12) {
+    const seen = new Set();
+    const result = [];
+    for (const raw of words || []) {
+        const word = normalizeWord(raw);
+        if (!word || seen.has(word)) continue;
+        seen.add(word);
+        result.push(word);
+        if (result.length >= limit) break;
+    }
+    return result;
+}
+
+async function fetchJsonOrNull(url) {
+    try {
+        const res = await fetch(url);
+        if (!res.ok) return null;
+        return await res.json();
+    } catch (error) {
+        console.warn('联网词族查询失败', url, error);
+        return null;
+    }
+}
+
+async function fetchOnlineWordRelations(word) {
+    const normalized = normalizeWord(word);
+    if (!normalized) return { synonyms: [], antonyms: [], sources: [] };
+    if (onlineFamilyCache[normalized]) return onlineFamilyCache[normalized];
+
+    const [dictData, datamuseSyns, datamuseAnts] = await Promise.all([
+        fetchJsonOrNull(`https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(normalized)}`),
+        fetchJsonOrNull(`https://api.datamuse.com/words?rel_syn=${encodeURIComponent(normalized)}&max=12`),
+        fetchJsonOrNull(`https://api.datamuse.com/words?rel_ant=${encodeURIComponent(normalized)}&max=12`)
+    ]);
+
+    let synonyms = [];
+    let antonyms = [];
+    let sources = [];
+
+    if (Array.isArray(dictData)) {
+        sources.push('Free Dictionary API');
+        dictData.forEach(entry => {
+            (entry.meanings || []).forEach(meaning => {
+                synonyms.push(...(meaning.synonyms || []));
+                antonyms.push(...(meaning.antonyms || []));
+                (meaning.definitions || []).forEach(def => {
+                    synonyms.push(...(def.synonyms || []));
+                    antonyms.push(...(def.antonyms || []));
+                });
+            });
+        });
+    }
+
+    if (Array.isArray(datamuseSyns)) {
+        sources.push('Datamuse');
+        synonyms.push(...datamuseSyns.map(item => item.word));
+    }
+
+    if (Array.isArray(datamuseAnts)) {
+        sources.push('Datamuse');
+        antonyms.push(...datamuseAnts.map(item => item.word));
+    }
+
+    onlineFamilyCache[normalized] = {
+        synonyms: uniqWords(synonyms.filter(w => normalizeWord(w) !== normalized), 12),
+        antonyms: uniqWords(antonyms.filter(w => normalizeWord(w) !== normalized), 12),
+        sources: [...new Set(sources)]
+    };
+    return onlineFamilyCache[normalized];
+}
+
 // --- 持久化 ---
 function saveAppData() {
     try {
@@ -81,9 +411,13 @@ function saveAppData() {
             unfamiliarBook,
             todayHandledWords,
             dailyWords,
+            currentBook,
+            bookProgress,
             userData,
             garden: gardenState,
-            studyHistory
+            studyHistory,
+            reviewSchedule,
+            learningStats
         }));
     } catch (e) { console.error('保存失败', e); }
 }
@@ -96,18 +430,86 @@ function loadAppData() {
         if (data.unfamiliarBook) unfamiliarBook = data.unfamiliarBook;
         if (data.todayHandledWords) todayHandledWords = data.todayHandledWords;
         if (data.dailyWords) dailyWords = data.dailyWords;
+        if (data.currentBook) currentBook = { ...currentBook, ...data.currentBook };
+        if (data.bookProgress) bookProgress = data.bookProgress;
+        if (!Object.keys(bookProgress).length && currentBook.key) {
+            bookProgress[currentBook.key] = {
+                ...currentBook,
+                dailyWords: [...dailyWords],
+                todayHandledWords: [...todayHandledWords]
+            };
+        }
         if (data.userData) userData = { ...userData, ...data.userData };
         if (data.garden) {
             gardenState = { ...gardenState, ...data.garden };
             if (!Array.isArray(gardenState.pots)) gardenState.pots = [];
+            if (!Array.isArray(gardenState.flowerRoom)) gardenState.flowerRoom = [];
         }
         if (data.studyHistory) studyHistory = data.studyHistory;
+        if (data.reviewSchedule) reviewSchedule = data.reviewSchedule;
+        if (data.learningStats) learningStats = data.learningStats;
     } catch (e) { console.error('读取失败', e); }
 }
 
 // 弹窗控制绑定为全局函数，供 HTML 调用
 window.closeModal = function(id) { document.getElementById(id).classList.remove('active'); }
 window.openModal = function(id) { document.getElementById(id).classList.add('active'); }
+
+window.showWordFamily = async function(word) {
+    const normalized = normalizeWord(word);
+    const title = document.getElementById('family-word-title');
+    const body = document.getElementById('family-content');
+
+    title.innerText = `「${word}」的家族`;
+    body.innerHTML = `
+        <div class="family-empty">
+            <div class="family-pet">🐾</div>
+            <p>正在联网查询，请稍等...</p>
+        </div>
+    `;
+    window.openModal('word-family-modal');
+
+    const data = await ensureWordFamilyData();
+    const info = data.families?.[normalized];
+    const online = await fetchOnlineWordRelations(normalized);
+
+    const roots = [...(info?.roots || []), ...getBasicAffixAnalysis(normalized, info?.roots || [])];
+    const rootsHtml = roots.length ? roots.map(root => `
+        <div class="family-root-card">
+            <div class="family-root-head">
+                <span class="family-root">${escapeHtml(root.root)}</span>
+                <span class="family-root-tag">${escapeHtml(root.class || 'root')}</span>
+            </div>
+            <div class="family-meaning"><strong>意思：</strong>${escapeHtml(root.meaning)}</div>
+            ${root.origin ? `<div class="family-origin">来源：${escapeHtml(root.origin)}</div>` : ''}
+        </div>
+    `).join('') : '<span class="family-muted">暂无</span>';
+
+    const chips = words => words && words.length
+        ? words.map(w => `<button class="family-chip" onclick="speakWord('${escapeHtml(w)}')">${escapeHtml(w)}</button>`).join('')
+        : '<span class="family-muted">暂无</span>';
+
+    body.innerHTML = `
+        <div class="family-section">
+            <h4>词根 / 词缀分析</h4>
+            ${rootsHtml}
+        </div>
+        <div class="family-section">
+            <h4>同根词</h4>
+            <div class="family-chip-list">${chips(info?.family || [])}</div>
+        </div>
+        <div class="family-section">
+            <h4>同义词</h4>
+            <div class="family-chip-list">${chips(online.synonyms)}</div>
+        </div>
+        <div class="family-section">
+            <h4>反义词</h4>
+            <div class="family-chip-list">${chips(online.antonyms)}</div>
+        </div>
+        <p class="family-note">词根/词缀来自 ECDICT 明确例词匹配和基础词缀规则；不确定时显示暂无。同义词/反义词来自联网词典接口。</p>
+        ${online.sources.length ? `<p class="family-note">联网来源：${online.sources.map(escapeHtml).join('、')}</p>` : '<p class="family-note">联网来源：暂无可用结果</p>'}
+    `;
+}
 
 // --- API 辅助函数 ---
 async function apiPost(path, body) {
@@ -140,6 +542,178 @@ async function apiUpload(path, formData) {
     }
 }
 
+async function syncStudyHistoryFromServer() {
+    const data = await apiGet('/api/study-records');
+    if (data.history) {
+        studyHistory = { ...studyHistory, ...data.history };
+        saveAppData();
+    }
+}
+
+async function persistStudyRecord(wordData, category = '') {
+    const todayStr = getTodayDateStr();
+    const payload = {
+        date: todayStr,
+        word: wordData.word,
+        phonetic: wordData.phonetic || '',
+        translation: wordData.translation || '',
+        category,
+        source: currentBook.key || 'local'
+    };
+    const data = await apiPost('/api/study-records', payload);
+    if (data.error && data.error !== '未登录') {
+        console.warn('学习记录同步失败', data.error);
+    }
+}
+
+function getTodayReviewWords() {
+    const todayStr = getTodayDateStr();
+    return (reviewSchedule[todayStr] || []).map(item => ({
+        ...item,
+        isReview: true,
+        firstSeenDate: item.firstSeenDate || item.originalDate || todayStr,
+        reviewDueDate: todayStr
+    }));
+}
+
+function scheduleReview(wordData, category) {
+    const todayStr = getTodayDateStr();
+    const normalized = normalizeWord(wordData.word);
+    if (!normalized) return;
+
+    const intervals = category === 'unfamiliar' ? [1, 2, 4, 7, 15, 30] : [5];
+    intervals.forEach((days, stage) => {
+        const dueDate = addDays(todayStr, days);
+        if (!reviewSchedule[dueDate]) reviewSchedule[dueDate] = [];
+        reviewSchedule[dueDate] = reviewSchedule[dueDate].filter(item => normalizeWord(item.word) !== normalized);
+        reviewSchedule[dueDate].push({
+            ...wordData,
+            isReview: true,
+            reviewStage: stage + 1,
+            firstSeenDate: wordData.firstSeenDate || todayStr,
+            originalDate: todayStr,
+            reason: category
+        });
+    });
+}
+
+function updateLearningStats(wordData, category) {
+    const todayStr = getTodayDateStr();
+    if (!learningStats[todayStr]) {
+        learningStats[todayStr] = { learned: 0, review: 0, target: currentBook.dailyQuota || dailyWords.length || 0, seconds: 0 };
+    }
+    const stat = learningStats[todayStr];
+    stat.target = Math.max(stat.target || 0, currentBook.dailyQuota || dailyWords.length || 0);
+    if (wordData.isReview) stat.review += 1;
+    else stat.learned += 1;
+    const now = Date.now();
+    stat.seconds += Math.max(5, Math.min(600, Math.round((now - sessionStartTime) / 1000)));
+    sessionStartTime = now;
+}
+
+async function loadAllVocabularyBooks() {
+    const keys = ['cet4', 'cet6', 'ielts', 'kaoyan'];
+    const lists = await Promise.all(keys.map(getVocabularyBook));
+    const map = new Map();
+    lists.flat().forEach(item => {
+        const key = normalizeWord(item.word);
+        if (key && !map.has(key)) map.set(key, item);
+    });
+    return [...map.values()];
+}
+
+function isChineseQuery(query) {
+    return /[\u4e00-\u9fa5]/.test(query);
+}
+
+async function searchLocalVocabulary(query) {
+    const normalized = normalizeWord(query);
+    const allWords = await loadAllVocabularyBooks();
+    if (isChineseQuery(query)) {
+        return allWords
+            .filter(item => (item.translation || '').includes(query))
+            .slice(0, 20);
+    }
+    return allWords
+        .filter(item => normalizeWord(item.word) === normalized || normalizeWord(item.word).includes(normalized))
+        .slice(0, 20);
+}
+
+function parseDictionaryEntry(entry) {
+    const phonetic = entry.phonetic || (entry.phonetics || []).find(p => p.text)?.text || '';
+    const lines = [];
+    (entry.meanings || []).forEach(meaning => {
+        const definition = meaning.definitions?.[0]?.definition;
+        if (definition) lines.push(`${meaning.partOfSpeech || ''}. ${definition}`.trim());
+    });
+    return {
+        word: entry.word,
+        phonetic,
+        translation: cleanTranslation(lines.slice(0, 4).join('\n') || '暂无释义')
+    };
+}
+
+async function searchOnlineEnglish(query) {
+    const data = await apiGet(`/api/dictionary/${encodeURIComponent(normalizeWord(query))}`);
+    if (data.entries && Array.isArray(data.entries)) {
+        return data.entries.map(parseDictionaryEntry).filter(item => item.word);
+    }
+    return [];
+}
+
+function renderSearchResults(results, query) {
+    const container = document.getElementById('search-result');
+    if (!results.length) {
+        container.innerHTML = `<div class="search-empty">没有找到「${escapeHtml(query)}」相关结果。<br>可以换一个更具体的中文释义或英文单词试试。</div>`;
+        return;
+    }
+    container.innerHTML = results.map((item, index) => `
+        <div class="search-card">
+            <div class="search-word">${escapeHtml(item.word)} <span onclick="speakWord('${escapeHtml(item.word)}')" style="cursor:pointer;">🔊</span></div>
+            ${item.phonetic ? `<div class="search-phonetic">${escapeHtml(item.phonetic)}</div>` : ''}
+            <div class="search-translation">${escapeHtml(cleanTranslation(item.translation || '暂无释义'))}</div>
+            <div class="search-actions">
+                <button class="search-add-btn" onclick="addSearchWordToToday(${index})">加入今日任务</button>
+                <button class="search-family-btn" onclick="showWordFamily('${escapeHtml(item.word)}')">我的家族</button>
+            </div>
+        </div>
+    `).join('');
+    window.currentSearchResults = results;
+}
+
+async function performSearch() {
+    const query = document.getElementById('search-input').value.trim();
+    if (!query) return alert('请输入要搜索的内容');
+    const container = document.getElementById('search-result');
+    container.innerHTML = '<div class="search-empty">正在搜索...</div>';
+
+    let results = await searchLocalVocabulary(query);
+    if (!isChineseQuery(query)) {
+        const onlineResults = await searchOnlineEnglish(query);
+        const seen = new Set(results.map(item => normalizeWord(item.word)));
+        onlineResults.forEach(item => {
+            const key = normalizeWord(item.word);
+            if (key && !seen.has(key)) {
+                seen.add(key);
+                results.push(item);
+            }
+        });
+    }
+    renderSearchResults(results, query);
+}
+
+window.addSearchWordToToday = function(index) {
+    const wordData = window.currentSearchResults?.[index];
+    if (!wordData) return;
+    if (!dailyWords.some(w => normalizeWord(w.word) === normalizeWord(wordData.word))) {
+        dailyWords.push(wordData);
+    }
+    if (!currentBook.name) currentBook.name = '搜索加入';
+    renderWordList(currentBook.name);
+    saveAppData();
+    alert(`已加入今日任务：${wordData.word}`);
+}
+
 function updateAvatarUI(url) {
     if (!url) return;
     const els = ['avatar-preview', 'sidebar-avatar', 'profile-avatar'];
@@ -158,9 +732,15 @@ function enterMainScreen() {
         gardenState.pots = Array.from({ length: 6 }, () => ({ plant: null }));
         saveAppData();
     }
+    initPlantSelector();
     renderGarden();
     document.getElementById('sidebar-nickname').innerText = userData.nickname || '同学';
     updateAvatarUI(userData.avatar_url);
+    syncStudyHistoryFromServer();
+    renderBookSidebar();
+    if (dailyWords.length > 0) {
+        renderWordList(currentBook.name || '今日学习');
+    }
 }
 
 // --- 1. 登录与初始化 ---
@@ -313,25 +893,210 @@ navItems.forEach(item => {
     });
 });
 
+document.getElementById('search-btn').addEventListener('click', () => {
+    document.getElementById('search-input').value = '';
+    document.getElementById('search-result').innerHTML = '<div class="search-empty">支持中文查英文，也支持英文联网查词。</div>';
+    window.openModal('search-modal');
+});
+
+document.getElementById('search-submit-btn').addEventListener('click', performSearch);
+document.getElementById('search-input').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') performSearch();
+});
+
+document.getElementById('book-select').addEventListener('change', (e) => {
+    if (e.target.value === '__custom__') {
+        document.getElementById('custom-book-file').click();
+    }
+});
+
+document.getElementById('custom-book-file').addEventListener('change', async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+        const text = await file.text();
+        const words = parseCustomBook(text, file.name);
+        if (!words.length) return alert('没有识别到单词。JSON 需包含 word/translation 字段；CSV/TXT 每行可写 word,translation。');
+        const key = `custom_${Date.now()}`;
+        const name = file.name.replace(/\.[^.]+$/, '').slice(0, 16) || '自定义词库';
+        bookProgress[key] = {
+            key,
+            name,
+            words: shuffleArray(words),
+            customWords: words,
+            cursor: 0,
+            dailyQuota: 20,
+            dailyWords: [],
+            todayHandledWords: []
+        };
+        const option = document.createElement('option');
+        option.value = key;
+        option.textContent = `${name}（自定义）`;
+        document.getElementById('book-select').appendChild(option);
+        document.getElementById('book-select').value = key;
+        renderBookSidebar();
+        saveAppData();
+        alert(`已添加自定义词库：${name}，共 ${words.length} 词`);
+    } catch (error) {
+        console.error(error);
+        alert('自定义词库读取失败，请检查文件格式。');
+    } finally {
+        e.target.value = '';
+        if (document.getElementById('book-select').value === '__custom__') {
+            document.getElementById('book-select').value = '';
+        }
+    }
+});
+
+function parseCustomBook(text, filename) {
+    if (filename.toLowerCase().endsWith('.json')) {
+        const data = JSON.parse(text);
+        const list = Array.isArray(data) ? data : data.words;
+        if (!Array.isArray(list)) return [];
+        return list.map(item => ({
+            word: String(item.word || item.en || item.english || '').trim(),
+            phonetic: String(item.phonetic || '').trim(),
+            translation: cleanTranslation(item.translation || item.cn || item.chinese || item.meaning || '')
+        })).filter(item => item.word);
+    }
+    return text.split(/\r?\n/).map(line => {
+        const parts = line.split(/,|\t/);
+        return {
+            word: String(parts[0] || '').trim(),
+            phonetic: '',
+            translation: cleanTranslation(parts.slice(1).join(' ') || '')
+        };
+    }).filter(item => item.word);
+}
+
+function renderBookSidebar() {
+    syncCustomBookOptions();
+    const list = document.getElementById('book-list');
+    const keys = Object.keys(bookProgress);
+    const items = keys.map(key => {
+        const progress = bookProgress[key];
+        const active = key === currentBook.key ? 'active' : '';
+        const count = progress.dailyWords?.length || 0;
+        return `
+            <div class="book-side-row ${active}" onclick="switchBook('${escapeHtml(key)}')">
+                <div class="book-item ${active}">${escapeHtml((progress.name || getBookName(key)).substring(0, 2))}</div>
+                <div class="book-side-meta">
+                    <strong>${escapeHtml(progress.name || getBookName(key))}</strong>
+                    <span>${count} 词 · 已到 ${progress.cursor || 0}</span>
+                </div>
+                <button class="book-delete-btn" onclick="event.stopPropagation(); deleteBook('${escapeHtml(key)}')">×</button>
+            </div>
+        `;
+    }).join('');
+    list.innerHTML = `
+        ${items || '<div class="sidebar-empty">还没有词库</div>'}
+        <button class="book-add-btn" id="sidebar-add-book-btn">＋ 添加词库</button>
+        ${currentBook.key ? '<button class="book-add-btn ghost" id="sidebar-edit-book-btn">⚙ 更改当前设置</button>' : ''}
+    `;
+    document.getElementById('sidebar-add-book-btn')?.addEventListener('click', () => {
+        window.toggleSidebar();
+        const todayStr = getTodayDateStr();
+        const nextMonth = new Date(); nextMonth.setDate(new Date().getDate() + 30);
+        document.getElementById('start-date').value = todayStr;
+        document.getElementById('end-date').value = nextMonth.toISOString().split('T')[0];
+        document.getElementById('import-state').style.display = 'flex';
+        document.getElementById('learning-state').style.display = 'none';
+    });
+    document.getElementById('sidebar-edit-book-btn')?.addEventListener('click', () => {
+        window.toggleSidebar();
+        if (currentBook.key) document.getElementById('book-select').value = currentBook.key;
+        const todayStr = getTodayDateStr();
+        const nextMonth = new Date(); nextMonth.setDate(new Date().getDate() + 30);
+        if (!document.getElementById('start-date').value) document.getElementById('start-date').value = todayStr;
+        if (!document.getElementById('end-date').value) document.getElementById('end-date').value = nextMonth.toISOString().split('T')[0];
+        document.getElementById('import-state').style.display = 'flex';
+        document.getElementById('learning-state').style.display = 'none';
+    });
+}
+
+function syncCustomBookOptions() {
+    const select = document.getElementById('book-select');
+    Object.keys(bookProgress).forEach(key => {
+        const progress = bookProgress[key];
+        if (!key.startsWith('custom_') || select.querySelector(`option[value="${key}"]`)) return;
+        const option = document.createElement('option');
+        option.value = key;
+        option.textContent = `${progress.name || '自定义词库'}（自定义）`;
+        select.appendChild(option);
+    });
+}
+
+window.deleteBook = function(bookKey) {
+    const progress = bookProgress[bookKey];
+    if (!progress) return;
+    if (!confirm(`确定删除「${progress.name || getBookName(bookKey)}」吗？学习记录不会删除。`)) return;
+    delete bookProgress[bookKey];
+    delete vocabularyCache[bookKey];
+    if (currentBook.key === bookKey) {
+        currentBook = { key: '', name: '', words: [], cursor: 0, dailyQuota: 20 };
+        dailyWords = [];
+        todayHandledWords = [];
+        document.getElementById('learning-state').style.display = 'none';
+        document.getElementById('import-state').style.display = 'flex';
+    }
+    renderBookSidebar();
+    saveAppData();
+}
+
+window.switchBook = async function(bookKey) {
+    const progress = bookProgress[bookKey];
+    if (!progress) return;
+    currentBook = { ...currentBook, ...progress };
+    currentBook.words = currentBook.words?.length ? currentBook.words : shuffleArray(await getVocabularyBook(bookKey));
+    dailyWords = [...(progress.dailyWords || [])];
+    todayHandledWords = [...(progress.todayHandledWords || [])];
+    renderWordList(currentBook.name || getBookName(bookKey));
+    renderBookSidebar();
+    saveAppData();
+    window.toggleSidebar();
+}
+
 // --- 2. 词库拉取与任务生成 ---
 document.getElementById('import-btn').addEventListener('click', async () => {
     const bookSelect = document.getElementById('book-select');
     const bookKey = bookSelect.value;
+    if (bookKey === '__custom__') {
+        document.getElementById('custom-book-file').click();
+        return;
+    }
     if (!bookKey) return alert('请先选择一个词库！');
+    const startDate = document.getElementById('start-date').value;
+    const endDate = document.getElementById('end-date').value;
     
     const btn = document.getElementById('import-btn');
     btn.innerText = "正在打乱数据...";
     btn.disabled = true;
 
-    let fullWordList = await loadVocabularyBook(bookKey);
+    let fullWordList = await getVocabularyBook(bookKey);
     if (fullWordList.length > 0) {
         fullWordList = shuffleArray(fullWordList);
-        const dailyQuota = 20; // 为演示写死 20 个
-        dailyWords = fullWordList.slice(0, dailyQuota);
+        const dailyQuota = calculateDailyQuota(fullWordList.length, startDate, endDate);
+        const reviewWords = getTodayReviewWords();
+        const reviewSet = new Set(reviewWords.map(w => normalizeWord(w.word)));
+        const newWords = fullWordList.filter(w => !reviewSet.has(normalizeWord(w.word))).slice(0, dailyQuota);
+        dailyWords = [...reviewWords, ...newWords];
         todayHandledWords = []; // 重置今日已处理
 
         const bookName = bookSelect.options[bookSelect.selectedIndex].text.split(' ')[0];
-        document.getElementById('book-list').innerHTML = `<div class="book-item active">${bookName.substring(0,2)}</div>`;
+        currentBook = {
+            key: bookKey,
+            name: bookName,
+            words: fullWordList,
+            cursor: newWords.length,
+            dailyQuota
+        };
+        if (bookProgress[bookKey]?.customWords) currentBook.customWords = bookProgress[bookKey].customWords;
+        bookProgress[bookKey] = {
+            ...currentBook,
+            dailyWords: [...dailyWords],
+            todayHandledWords: []
+        };
+        renderBookSidebar();
         document.getElementById('daily-task-count').innerText = `今日任务: ${dailyQuota} 词`;
 
         renderWordList(bookName);
@@ -345,27 +1110,65 @@ function renderWordList(bookName) {
     document.getElementById('import-state').style.display = 'none';
     document.getElementById('learning-state').style.display = 'flex';
     document.getElementById('current-book-title').innerText = bookName;
+    document.getElementById('daily-task-count').innerText = `今日任务: ${dailyWords.length} 词`;
     
     const container = document.getElementById('word-list-container');
     container.innerHTML = ''; 
     
     dailyWords.forEach((wordData, index) => {
         const wordEl = document.createElement('div');
+        const safeWord = escapeHtml(wordData.word);
+        const safeTranslation = escapeHtml(cleanTranslation(wordData.translation));
         wordEl.className = 'word-card';
+        if (wordData.isReview) wordEl.classList.add('review-word-card');
         wordEl.dataset.index = index; 
         wordEl.innerHTML = `
+            ${wordData.isReview ? `<div class="review-badge">复习词 · 首次学习 ${escapeHtml(wordData.firstSeenDate || '未知')}</div>` : ''}
             <div class="word-info" ondblclick="window.open('https://dict.youdao.com/result?word=${encodeURIComponent(wordData.word)}', '_blank')" title="双击查看详细释义">
-                <div class="word-en" onclick="event.stopPropagation(); speakWord('${wordData.word}')">${wordData.word} 🔊</div>
-                <div class="word-cn">${wordData.translation || '暂无'}</div>
+                <div class="word-en" onclick="event.stopPropagation(); speakWord('${safeWord}')">${safeWord} 🔊</div>
+                <div class="word-cn">${safeTranslation}</div>
             </div>
             <div class="word-actions">
                 <button class="word-action-btn btn-known" onclick="sortWord(${index}, 'known')">已认识</button>
                 <button class="word-action-btn btn-familiar" onclick="sortWord(${index}, 'familiar')">熟悉</button>
                 <button class="word-action-btn btn-unfamiliar" onclick="sortWord(${index}, 'unfamiliar')">不熟悉</button>
+                ${renderWordFamilyButton(wordData.word)}
             </div>
         `;
         container.appendChild(wordEl);
     });
+    renderCompletionActions();
+}
+
+function renderCompletionActions() {
+    const container = document.getElementById('word-list-container');
+    const old = document.getElementById('completion-actions');
+    if (old) old.remove();
+
+    const panel = document.createElement('div');
+    panel.id = 'completion-actions';
+    panel.className = 'completion-actions';
+    panel.innerHTML = `
+        <div class="completion-pet">🐱</div>
+        <div class="completion-title">还想继续练一会儿吗</div>
+        <button class="action-outline-btn" id="continue-study-bottom-btn">继续背一组</button>
+        <button class="action-primary-btn" id="dictation-bottom-btn">默写已背单词</button>
+    `;
+    container.appendChild(panel);
+    document.getElementById('continue-study-bottom-btn').addEventListener('click', continueStudyGroup);
+    document.getElementById('dictation-bottom-btn').addEventListener('click', () => {
+        document.getElementById('setup-dictation-btn').click();
+    });
+}
+
+function syncCurrentBookProgress() {
+    if (!currentBook.key) return;
+    bookProgress[currentBook.key] = {
+        ...currentBook,
+        dailyWords: [...dailyWords],
+        todayHandledWords: [...todayHandledWords]
+    };
+    renderBookSidebar();
 }
 
 // --- 3. 处理单词分类与加入生词本 ---
@@ -386,6 +1189,11 @@ window.sortWord = function(wordIndex, category) {
     if (!studyHistory[todayStr]) studyHistory[todayStr] = [];
     const existsInHistory = studyHistory[todayStr].some(w => w.word === wordData.word);
     if (!existsInHistory) studyHistory[todayStr].push(wordData);
+    if (!alreadyHandled) {
+        persistStudyRecord(wordData, category);
+        scheduleReview(wordData, category);
+        updateLearningStats(wordData, category);
+    }
 
     // 如果是不熟悉，按日期加入生词本
     if (category === 'unfamiliar') {
@@ -394,11 +1202,52 @@ window.sortWord = function(wordIndex, category) {
         if (!exists) unfamiliarBook[todayStr].push(wordData);
     }
 
+    syncCurrentBookProgress();
     saveAppData();
+    renderCompletionActions();
 
     // UI 反馈
     const cardEl = document.querySelector(`.word-card[data-index="${wordIndex}"]`);
     if(cardEl) cardEl.classList.add('handled');
+}
+
+async function continueStudyGroup() {
+    if (!currentBook.key) {
+        alert('请先选择词库并生成今日任务。');
+        return;
+    }
+    let bookWords = currentBook.words || [];
+    if (!bookWords.length) {
+        bookWords = shuffleArray(await getVocabularyBook(currentBook.key));
+        currentBook.words = bookWords;
+    }
+    if (!bookWords.length) {
+        alert('词库加载失败，无法继续背。');
+        return;
+    }
+
+    const quota = currentBook.dailyQuota || 20;
+    const reviewWords = getTodayReviewWords().filter(item => !dailyWords.some(w => normalizeWord(w.word) === normalizeWord(item.word)));
+    let nextWords = bookWords.slice(currentBook.cursor, currentBook.cursor + quota);
+    if (nextWords.length === 0) {
+        const learned = new Set(dailyWords.map(w => w.word));
+        nextWords = bookWords.filter(w => !learned.has(w.word)).slice(0, quota);
+        if (nextWords.length === 0) {
+            alert('这个词库已经没有新的可追加单词了。');
+            return;
+        }
+        currentBook.cursor = dailyWords.length + nextWords.length;
+    } else {
+        currentBook.cursor += nextWords.length;
+    }
+
+    const existing = new Set(dailyWords.map(w => w.word));
+    dailyWords.push(...reviewWords.filter(w => !existing.has(w.word)));
+    reviewWords.forEach(w => existing.add(w.word));
+    dailyWords.push(...nextWords.filter(w => !existing.has(w.word)));
+    renderWordList(currentBook.name || '继续学习');
+    syncCurrentBookProgress();
+    saveAppData();
 }
 
 // --- 4. 查看生词本逻辑 (已移至侧边栏) ---
@@ -413,7 +1262,14 @@ function renderUnfamiliarModal() {
             const words = unfamiliarBook[date];
             let listHtml = '';
             words.forEach(w => {
-                listHtml += `<div class="unfamiliar-item"><span style="font-weight:bold;">${w.word}</span><span style="color:#666;">${w.translation}</span></div>`;
+                listHtml += `
+                    <div class="unfamiliar-item">
+                        <div>
+                            <span style="font-weight:bold;">${escapeHtml(w.word)}</span>
+                            <span style="color:#666;">${escapeHtml(cleanTranslation(w.translation || ''))}</span>
+                        </div>
+                        ${renderWordFamilyButton(w.word)}
+                    </div>`;
             });
             container.innerHTML += `
                 <div class="date-group">
@@ -636,6 +1492,8 @@ document.getElementById('dictate-back-btn').addEventListener('click', () => {
 // --- 7. 能量花园逻辑 ---
 function renderGarden() {
     document.getElementById('water-count').innerText = gardenState.water;
+    document.getElementById('plant-btn').innerText = `🌱 播种 (${PLANT_COST}💧)`;
+    document.getElementById('water-btn').innerText = `💧 浇水/收获 (${WATER_COST}💧)`;
     const grid = document.getElementById('garden-grid');
     grid.innerHTML = '';
 
@@ -663,9 +1521,14 @@ function renderGarden() {
     });
 }
 
+function initPlantSelector() {
+    const select = document.getElementById('plant-type-select');
+    select.innerHTML = PLANT_TYPES.map((name, index) => `<option value="${index}">${name}</option>`).join('');
+}
+
 document.getElementById('plant-btn').addEventListener('click', () => {
-    if (gardenState.water < 5) {
-        alert('水滴不足！每学一个单词可获得 1 滴水。');
+    if (gardenState.water < PLANT_COST) {
+        alert(`水滴不足！播种需要 ${PLANT_COST} 滴水。`);
         return;
     }
     const emptyIndex = gardenState.pots.findIndex(p => !p.plant);
@@ -673,8 +1536,8 @@ document.getElementById('plant-btn').addEventListener('click', () => {
         alert('没有空花盆了，请先收获或等待植物成长！');
         return;
     }
-    gardenState.water -= 5;
-    const type = Math.floor(Math.random() * PLANT_TYPES.length);
+    gardenState.water -= PLANT_COST;
+    const type = Number(document.getElementById('plant-type-select').value || 0);
     gardenState.pots[emptyIndex].plant = { stage: 0, waterCount: 0, type };
     gardenState.selectedPot = emptyIndex;
     saveAppData();
@@ -687,23 +1550,30 @@ document.getElementById('water-btn').addEventListener('click', () => {
         alert('请先点击选择一个有植物的花盆！');
         return;
     }
-    if (gardenState.water < 3) {
-        alert('水滴不足！每学一个单词可获得 1 滴水。');
+    if (gardenState.water < WATER_COST) {
+        alert(`水滴不足！浇水需要 ${WATER_COST} 滴水。`);
         return;
     }
     const plant = gardenState.pots[idx].plant;
     if (plant.stage >= 3) {
-        alert('这株植物已经开花了，可以收获获得奖励！');
-        // 收获：移除植物，返还水滴，奖励额外水滴
+        gardenState.water -= WATER_COST;
+        if (!Array.isArray(gardenState.flowerRoom)) gardenState.flowerRoom = [];
+        gardenState.flowerRoom.push({
+            type: plant.type,
+            name: PLANT_TYPES[plant.type],
+            emoji: PLANT_EMOJIS[plant.type][3],
+            harvestedAt: getTodayDateStr()
+        });
         gardenState.pots[idx].plant = null;
-        gardenState.water += 8; // 返还3 + 奖励5
+        gardenState.water += HARVEST_REWARD;
         gardenState.selectedPot = -1;
+        alert(`🎉 花朵已收入花房，获得 ${HARVEST_REWARD} 滴水奖励！`);
         saveAppData();
         renderGarden();
         return;
     }
 
-    gardenState.water -= 3;
+    gardenState.water -= WATER_COST;
     plant.waterCount += 1;
     if (plant.waterCount >= 2) {
         plant.stage += 1;
@@ -726,6 +1596,49 @@ document.getElementById('menu-btn').addEventListener('click', window.toggleSideb
 document.getElementById('sidebar-unfamiliar-btn').addEventListener('click', () => {
     window.toggleSidebar();
     renderUnfamiliarModal();
+});
+
+document.getElementById('sidebar-stats-btn').addEventListener('click', () => {
+    window.toggleSidebar();
+    renderStats(7);
+    window.openModal('stats-modal');
+});
+
+document.getElementById('sidebar-flower-room-btn').addEventListener('click', () => {
+    window.toggleSidebar();
+    renderFlowerRoom();
+    window.openModal('flower-room-modal');
+});
+
+function renderFlowerRoom() {
+    const container = document.getElementById('flower-room-content');
+    const flowers = gardenState.flowerRoom || [];
+    if (!flowers.length) {
+        container.innerHTML = '<div class="search-empty">花房还空着，等花成熟后收获进来吧。</div>';
+        return;
+    }
+    const grouped = flowers.reduce((acc, flower) => {
+        acc[flower.name] = acc[flower.name] || { ...flower, count: 0 };
+        acc[flower.name].count += 1;
+        return acc;
+    }, {});
+    container.innerHTML = Object.values(grouped).map(item => `
+        <div class="flower-room-item">
+            <div class="flower-room-emoji">${escapeHtml(item.emoji)}</div>
+            <div>
+                <strong>${escapeHtml(item.name)}</strong>
+                <p>收藏 ${item.count} 朵 · 最近收获 ${escapeHtml(item.harvestedAt || '')}</p>
+            </div>
+        </div>
+    `).join('');
+}
+
+document.querySelectorAll('.stats-range button').forEach(btn => {
+    btn.addEventListener('click', () => {
+        document.querySelectorAll('.stats-range button').forEach(item => item.classList.remove('active'));
+        btn.classList.add('active');
+        renderStats(Number(btn.dataset.days));
+    });
 });
 
 // --- 9. 日历逻辑 ---
@@ -785,12 +1698,75 @@ window.showDayWords = function(dateStr) {
     } else {
         container.innerHTML = words.map(w => `
             <div class="unfamiliar-item">
-                <span style="font-weight:bold;">${w.word}</span>
-                <span style="color:#666;">${w.translation || ''}</span>
+                <div>
+                    <span style="font-weight:bold;">${escapeHtml(w.word)}</span>
+                    <span style="color:#666;">${escapeHtml(cleanTranslation(w.translation || ''))}</span>
+                </div>
+                ${renderWordFamilyButton(w.word)}
             </div>
         `).join('');
     }
     window.openModal('day-words-modal');
+}
+
+function renderStats(days = 7) {
+    const end = new Date();
+    const start = new Date();
+    start.setDate(end.getDate() - days + 1);
+    const dateKeys = getDateRange(start.toISOString().split('T')[0], end.toISOString().split('T')[0]);
+    const rows = dateKeys.map(date => {
+        const historyWords = studyHistory[date] || [];
+        const stat = learningStats[date] || {};
+        const learned = stat.learned ?? historyWords.filter(w => !w.isReview).length;
+        const review = stat.review ?? historyWords.filter(w => w.isReview).length;
+        const target = stat.target || currentBook.dailyQuota || 0;
+        const seconds = stat.seconds || 0;
+        return { date, learned, review, total: learned + review, target, seconds, completed: target > 0 && learned + review >= target };
+    });
+
+    const total = rows.reduce((sum, item) => sum + item.total, 0);
+    const reviewTotal = rows.reduce((sum, item) => sum + item.review, 0);
+    const completedDays = rows.filter(item => item.completed).length;
+    const minutes = Math.round(rows.reduce((sum, item) => sum + item.seconds, 0) / 60);
+    const maxTotal = Math.max(1, ...rows.map(item => item.total));
+
+    const bars = rows.map(item => {
+        const learnedHeight = Math.max(2, Math.round((item.learned / maxTotal) * 120));
+        const reviewHeight = item.review ? Math.max(2, Math.round((item.review / maxTotal) * 120)) : 0;
+        const day = item.date.slice(5).replace('-', '/');
+        return `
+            <div class="bar-day" title="${item.date}：学习 ${item.learned}，复习 ${item.review}">
+                ${item.completed ? '<div class="bar-complete">✓</div>' : ''}
+                <div class="bar-stack" style="height:${Math.max(4, learnedHeight + reviewHeight)}px">
+                    <div class="bar-review" style="height:${reviewHeight}px"></div>
+                    <div class="bar-learned" style="height:${learnedHeight}px"></div>
+                </div>
+                <div class="bar-label">${day}</div>
+            </div>
+        `;
+    }).join('');
+
+    const maxSeconds = Math.max(1, ...rows.map(item => item.seconds));
+    const timeRows = rows.map(item => `
+        <div class="time-row">
+            <span>${item.date.slice(5).replace('-', '/')}</span>
+            <div class="time-bar-track"><div class="time-bar" style="width:${Math.round((item.seconds / maxSeconds) * 100)}%"></div></div>
+            <span>${Math.round(item.seconds / 60)}分</span>
+        </div>
+    `).join('');
+
+    document.getElementById('stats-content').innerHTML = `
+        <div class="stats-summary">
+            <div class="stats-summary-card"><strong>${total}</strong><span>学习/复习总词数</span></div>
+            <div class="stats-summary-card"><strong>${reviewTotal}</strong><span>复习词数</span></div>
+            <div class="stats-summary-card"><strong>${completedDays}</strong><span>完成任务天数</span></div>
+            <div class="stats-summary-card"><strong>${minutes}</strong><span>学习分钟</span></div>
+        </div>
+        <div class="stats-section-title">词数柱状图（绿色学习，橙色复习，✓ 表示完成当日任务）</div>
+        <div class="bar-chart">${bars}</div>
+        <div class="stats-section-title">学习时长分布</div>
+        ${timeRows || '<div class="search-empty">暂无学习时长记录</div>'}
+    `;
 }
 
 // --- 10. 专注模式逻辑 ---
@@ -819,6 +1795,12 @@ focusCard.addEventListener('click', () => {
 
 document.getElementById('focus-btn-known').addEventListener('click', (e) => {
     e.stopPropagation();
+    const wordData = focusQueue[focusIndex];
+    if (wordData) {
+        persistStudyRecord(wordData, 'known');
+        scheduleReview(wordData, 'known');
+        updateLearningStats(wordData, 'known');
+    }
     nextFocusCard();
 });
 
@@ -829,7 +1811,10 @@ document.getElementById('focus-btn-unknown').addEventListener('click', (e) => {
     if (!unfamiliarBook[todayStr]) unfamiliarBook[todayStr] = [];
     const exists = unfamiliarBook[todayStr].find(w => w.word === wordData.word);
     if (!exists) unfamiliarBook[todayStr].push(wordData);
+    scheduleReview(wordData, 'unfamiliar');
+    updateLearningStats(wordData, 'unfamiliar');
     saveAppData();
+    persistStudyRecord(wordData, 'unfamiliar');
     nextFocusCard();
 });
 
